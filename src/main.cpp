@@ -25,7 +25,6 @@
  *                            ----            |__|
  *                            _|_             _|_
  *
- * stosowany np. w kuchni
  */
 #include <Homie.h>
 #include <EEPROM.h>
