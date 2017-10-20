@@ -30,9 +30,13 @@
 #include <EEPROM.h>
 
 // Delay in ms for each percentage fade up/down (2ms = 2s full-range dim/1024)
-#define FADE_DELAY 1
+//#define FADE_DELAY 1
 // Delay in ms for each percentage fade up/down (15ms = 1,5s full-range dim/100)
-//#define FADE_DELAY 15
+#define FADE_DELAY 15
+
+#define NODE_FIRMWARE "LED-dimmer"
+#define NODE_VERSION "1.0.69"
+#define DEFAULT_DIM_MODE 2
 
 unsigned long downCounterStart;   // wskaznik startu timera
 unsigned long downCounterLimit=0; // limit timera
@@ -54,10 +58,9 @@ unsigned int analogWriteFreqVal = 200; // SOFT PWM frequency
 unsigned long int startMomentAnalog = 0; // znacznik czasu odczytu analoga
 int analogState = 0 ; // Ostatni zapamietany odczyt analoga
 
-
+HomieSetting<long> dimMode("dimMode", "Dimmer start mode"); // 1 - with detector, 2 - always on on start
 struct EEpromDataStruct {
   int currentPercentage;
-  int dimMode;  // 1 - with detector, 2 - always on start
 };
 
 EEpromDataStruct EEpromData;
@@ -67,14 +70,17 @@ HomieNode lightSensorNode("light", "voltage");
 /***
  * Fade LED up/down (absolute based)
  */
-void fadeToAbsolute( int toAbsolute) {
+void fadeToAbsolute( int toAbsolute)
+{
   int delta = ( toAbsolute - currentAbsolute ) < 0 ? -1 : 1;
-  while ( currentAbsolute != toAbsolute ) {
+  while ( currentAbsolute != toAbsolute )
+  {
     currentAbsolute += delta;
     analogWrite(PIN_DIMMER, currentAbsolute);
     delay( FADE_DELAY );
   }
-  if (toAbsolute == 1000) {
+  if (toAbsolute == 1000)
+  {
     digitalWrite(PIN_DIMMER, true);
     currentPercentage = 100;
   } else {
@@ -88,7 +94,8 @@ void fadeToAbsolute( int toAbsolute) {
 /***
  * Fade LED up/down (percentage based)
  */
-void fadeToPercentage( int toPercentage ) {
+void fadeToPercentage( int toPercentage )
+{
   currentPercentage = toPercentage;
   EEpromData.currentPercentage = toPercentage;
   EEPROM.put(0, EEpromData);
@@ -97,12 +104,14 @@ void fadeToPercentage( int toPercentage ) {
   //int toAbsolute = toPercentage;
   int toAbsolute = (toPercentage*toPercentage)/10;
   int delta = ( toAbsolute - currentAbsolute ) < 0 ? -1 : 1;
-  while ( currentAbsolute != toAbsolute ) {
+  while ( currentAbsolute != toAbsolute )
+  {
     currentAbsolute += delta;
     analogWrite(PIN_DIMMER, currentAbsolute);
     delay( FADE_DELAY );
   }
-  if (toPercentage==100) {
+  if (toPercentage==100)
+  {
     digitalWrite(PIN_DIMMER, true);
   }
 }
@@ -110,197 +119,30 @@ void fadeToPercentage( int toPercentage ) {
 /*
  * Update status of the node items to MQTT boker
  */
-void updateNodeStatus() {
+void updateNodeStatus()
+{
 
-  if (currentAbsolute>0) {
-    Homie.setNodeProperty(dimmerNode, "switch", "ON");
+  if (currentAbsolute>0)
+  {
+    dimmerNode.setProperty(  "switch").send( "ON");
   } else {
-    Homie.setNodeProperty(dimmerNode, "switch", "OFF");
+    dimmerNode.setProperty(  "switch").send( "OFF");
   }
   String msg;
   msg = currentPercentage;
-  Homie.setNodeProperty(dimmerNode, "percentage", msg );
+  dimmerNode.setProperty(  "percentage").send( msg );
   msg = currentAbsolute;
-  Homie.setNodeProperty(dimmerNode, "absolute", msg );
+  dimmerNode.setProperty(  "absolute").send( msg );
   msg = downCounterLimit;
-  Homie.setNodeProperty(dimmerNode, "timer", msg );
-  msg = EEpromData.dimMode;
-  Homie.setNodeProperty(dimmerNode, "dimMode", msg);
+  dimmerNode.setProperty(  "timer").send( msg );
 
 }
 
 /*
  * Setup (inside Homie)
  */
-void handlerSetup() {
-  Serial.println("setup via handler");
-  String msg;
-  msg = initDetecorVal;
-  Homie.setNodeProperty(dimmerNode, "starterStatus", msg);
-  updateNodeStatus();
-}
-
-/*
- * Loop (inside Homie)
- */
-void handlerLoop() {
-  // Timer processing
-  if (downCounterLimit>0) {
-    if ((millis() - downCounterStart ) > (downCounterLimit*1000)) {
-      downCounterLimit = 0;
-      fadeToPercentage( 0 );
-      updateNodeStatus();
-    }
-  }
-  if (millis()-startMomentAnalog>2000) {
-    startMomentAnalog=millis();
-    int newAnalogState = analogRead(A0);
-    if (abs(newAnalogState - analogState)>20) {
-      analogState = newAnalogState;
-      float voltage = analogState * (3.3 / 1023.0);
-      Serial.print(analogState);
-      Serial.print(" - ");
-      Serial.println(voltage);
-      String msg;
-      msg = voltage;
-      Homie.setNodeProperty(lightSensorNode, "value", msg);
-    }
-  }
-}
-
-/*
- * MQTT event processing - dimmer value request percentage
- */
-bool handlerDimmerPerc(String message) {
-  int requestedPercentage;
-  if (message.toInt() > 0)  {
-    downCounterLimit = 0;
-    requestedPercentage = message.toInt();
-    requestedPercentage = requestedPercentage > 100 ? 100 : requestedPercentage;
-    requestedPercentage = requestedPercentage < 1   ? 1   : requestedPercentage;
-    if (requestedPercentage != currentPercentage) {
-      fadeToPercentage( requestedPercentage );
-    }
-    updateNodeStatus();
-    return true;
-  } else if (message=="0") {
-    downCounterLimit = 0;
-    if (currentPercentage!=0) {
-      fadeToPercentage( 0 );
-    }
-    updateNodeStatus();
-  }
-  return false;
-}
-/*
- * MQTT event processing - dimmer value request absolute
- */
-bool handlerDimmerAbs(String message) {
-  int requestedAbsolute;
-  if (message.toInt() > 0) {
-    downCounterLimit = 0;
-    requestedAbsolute = message.toInt();
-    requestedAbsolute = requestedAbsolute > 1000 ? 1000 : requestedAbsolute;
-    requestedAbsolute = requestedAbsolute < 1 ? 1 : requestedAbsolute;
-    if (currentAbsolute!=requestedAbsolute) {
-      fadeToAbsolute( requestedAbsolute );
-    }
-    updateNodeStatus();
-    return true;
-  } else if (message=="0") {
-    downCounterLimit = 0;
-    if (currentAbsolute!=0) {
-      fadeToAbsolute( 0 );
-    }
-    updateNodeStatus();
-  }
-  return false;
-}
-/*
- * MQTT event processing - analog write freqency of Soft PWM
- */
-bool dimmerHandlerFreq(String message) {
-  int requestedFreq;
-  if (message.toInt() >= 200) {
-    requestedFreq = message.toInt();
-    analogWriteFreq(requestedFreq);
-    String msg;
-    msg = requestedFreq;
-    Homie.setNodeProperty(dimmerNode, "frequency", msg );
-  }
-}
-
-/*
- * MQTT event processing - ON/OFF switch request
- */
-bool handlerSwitch(String message) {
-   if (message=="ON") {
-     downCounterLimit = 0;
-     fadeToPercentage( 100 );
-     updateNodeStatus();
-     return true;
-   }
-   if (message=="OFF") {
-     downCounterLimit = 0;
-     fadeToPercentage( 0 );
-     updateNodeStatus();
-     return true;
-   }
-   return false;
-}
-
-/*
- * MQTT event processing - timer Request
- */
-bool handlerTimer(String message) {
-   if (message.toInt() > 0) {
-     if (currentPercentage == 0) {
-       fadeToPercentage( 100 );
-     }
-     downCounterLimit = message.toInt();
-     downCounterStart = millis();
-     updateNodeStatus();
-     return true;
-   }
-   return false;
-}
-/*
- * MQTT event processing - mode Command
- */
-bool handlerDimMode(String message) {
-  if (message.toInt() > 0) {
-    EEpromData.dimMode = message.toInt();
-    EEPROM.put(0, EEpromData);
-    EEPROM.commit();
-
-    String msg;
-    msg = EEpromData.dimMode;
-    Homie.setNodeProperty(dimmerNode, "dimMode", msg);
-    return true;
-  }
-  return false;
-}
-/*
- * Main setup - Homie initialization
- */
-void setup() {
-
-
-  pinMode(PIN_DETECTOR, INPUT_PULLUP);
-  initDetecorVal=digitalRead(PIN_DETECTOR);
-
-
-//  analogWrite(PIN_DIMMER, currentAbsolute);
-  analogWriteFreq(analogWriteFreqVal);
-  analogWriteRange(1000);
-
-  Serial.begin(115200);
-  delay(10);
-
-  Serial.println("");
-  Serial.println("---------------------------------------");
-
-  downCounterLimit = 0;
+void handlerSetup()
+{
   EEPROM.begin(sizeof(EEpromData));
   EEPROM.get(0,EEpromData);
 
@@ -310,19 +152,20 @@ void setup() {
     EEpromData.currentPercentage = 0;
   }
 
-
-  Serial.printf("      dimMode: %d\n",EEpromData.dimMode);
-  Serial.printf("currentPercentage: %d\n",EEpromData.currentPercentage);
+  //Serial.printf("currentPercentage: %d\n",EEpromData.currentPercentage);
 
 
-  switch (EEpromData.dimMode) {
+  switch ((int)dimMode.get())
+  {
     case 1: //  1 - with detector
       Serial.println("DETECTOR mode");
-      // Byl szybki reboot - trzeba zmienic stan dimmera
-      if (initDetecorVal==1) {
+      // We had fast reboot - dimmer state should change
+      if (initDetecorVal==1)
+      {
         Serial.println(" - fast reboot");
-        // Inwersja stanu dimmera w stosunku do stanu w EEPROM
-        if (EEpromData.currentPercentage>0) {
+        // Inversion of dimmer state - compare to EEPROM data
+        if (EEpromData.currentPercentage>0)
+        {
           currentAbsolute=0;
           currentPercentage=0;
           EEpromData.currentPercentage=0;
@@ -334,7 +177,7 @@ void setup() {
         // Without delay ESP may reboot 2 times and change of state don't have a place
         delay(3001);
       } else {
-        // Reboot nie był szybki start na 0
+        // Slow Reboot -  0
         Serial.println(" - slow reboot");
         currentAbsolute=0;
         currentPercentage=0;
@@ -349,40 +192,231 @@ void setup() {
       break;
     case 3: // 3 - always OFF on start
     default:
-    Serial.println("OFF on start mode");
-    currentAbsolute=0;
-    currentPercentage=0;
-    EEpromData.currentPercentage=0;
+      Serial.println("OFF on start mode");
+      currentAbsolute=0;
+      currentPercentage=0;
+      EEpromData.currentPercentage=0;
   }
-
   EEPROM.put(0, EEpromData);
   EEPROM.commit();
 
   pinMode(PIN_DIMMER, OUTPUT);
   analogWrite(PIN_DIMMER, currentAbsolute);
 
-  Serial.println("start init homie");
+  String msg;
+  msg = initDetecorVal;
+  dimmerNode.setProperty( "starterStatus").send( msg);
+  msg = dimMode.get();
+  dimmerNode.setProperty( "dimMode").send( msg);
+  updateNodeStatus();
+}
+
+/*
+ * Loop (inside Homie)
+ */
+void handlerLoop()
+{
+  // Timer processing
+  if (downCounterLimit>0)
+  {
+    if ((millis() - downCounterStart ) > (downCounterLimit*1000))
+    {
+      downCounterLimit = 0;
+      fadeToPercentage( 0 );
+      updateNodeStatus();
+    }
+  }
+  if (millis()-startMomentAnalog>2000)
+  {
+    startMomentAnalog=millis();
+    int newAnalogState = analogRead(A0);
+    if (abs(newAnalogState - analogState)>20)
+    {
+      analogState = newAnalogState;
+      float voltage = analogState * (3.3 / 1023.0);
+      Serial.print(analogState);
+      Serial.print(" - ");
+      Serial.println(voltage);
+      String msg;
+      msg = voltage;
+      lightSensorNode.setProperty( "value").send( msg);
+    }
+  }
+}
+
+/*
+ * MQTT event processing - dimmer value request percentage
+ */
+bool handlerDimmerPerc(const HomieRange& range, const String& message)
+{
+  int requestedPercentage;
+  if (message.toInt() > 0)
+  {
+    downCounterLimit = 0;
+    requestedPercentage = message.toInt();
+    requestedPercentage = requestedPercentage > 100 ? 100 : requestedPercentage;
+    requestedPercentage = requestedPercentage < 1   ? 1   : requestedPercentage;
+    if (requestedPercentage != currentPercentage)
+    {
+      fadeToPercentage( requestedPercentage );
+    }
+    updateNodeStatus();
+    return true;
+  } else if (message=="0") {
+    downCounterLimit = 0;
+    if (currentPercentage!=0)
+    {
+      fadeToPercentage( 0 );
+    }
+    updateNodeStatus();
+  }
+  return false;
+}
+/*
+ * MQTT event processing - dimmer value request absolute
+ */
+bool handlerDimmerAbs(const HomieRange& range, const String& message)
+{
+  int requestedAbsolute;
+  if (message.toInt() > 0)
+  {
+    downCounterLimit = 0;
+    requestedAbsolute = message.toInt();
+    requestedAbsolute = requestedAbsolute > 1000 ? 1000 : requestedAbsolute;
+    requestedAbsolute = requestedAbsolute < 1 ? 1 : requestedAbsolute;
+    if (currentAbsolute!=requestedAbsolute)
+    {
+      fadeToAbsolute( requestedAbsolute );
+    }
+    updateNodeStatus();
+    return true;
+  } else if (message=="0") {
+    downCounterLimit = 0;
+    if (currentAbsolute!=0)
+    {
+      fadeToAbsolute( 0 );
+    }
+    updateNodeStatus();
+  }
+  return false;
+}
+/*
+ * MQTT event processing - analog write freqency of Soft PWM
+ */
+bool dimmerHandlerFreq(const HomieRange& range, const String& message)
+{
+  int requestedFreq;
+  if (message.toInt() >= 200)
+  {
+    requestedFreq = message.toInt();
+    analogWriteFreq(requestedFreq);
+    String msg;
+    msg = requestedFreq;
+    dimmerNode.setProperty(  "frequency").send( msg );
+  }
+}
+
+/*
+ * MQTT event processing - ON/OFF switch request
+ */
+bool handlerSwitch(const HomieRange& range, const String& message)
+{
+   if (message=="ON")
+   {
+     downCounterLimit = 0;
+     fadeToPercentage( 100 );
+     updateNodeStatus();
+     return true;
+   }
+   if (message=="OFF")
+   {
+     downCounterLimit = 0;
+     fadeToPercentage( 0 );
+     updateNodeStatus();
+     return true;
+   }
+   return false;
+}
+/*
+ * Homie event processing
+ */
+void onHomieEvent(const HomieEvent& event)
+{
+  switch(event.type)
+  {
+    case HomieEventType::CONFIGURATION_MODE:
+      // Do whatever you want when configuration mode is started
+      fadeToPercentage(100);
+      break;
+    case HomieEventType::OTA_STARTED:
+      // Do whatever you want when OTA is started
+      fadeToPercentage(100);
+    break;
+  }
+}
+/*
+ * MQTT event processing - timer Request
+ */
+bool handlerTimer(const HomieRange& range, const String& message)
+{
+   if (message.toInt() > 0)
+   {
+     if (currentPercentage == 0)
+     {
+       fadeToPercentage( 100 );
+     }
+     downCounterLimit = message.toInt();
+     downCounterStart = millis();
+     updateNodeStatus();
+     return true;
+   }
+   return false;
+}
+
+/*
+ * Main setup - Homie initialization
+ */
+void setup()
+{
+
+
+  pinMode(PIN_DETECTOR, INPUT_PULLUP);
+  initDetecorVal=digitalRead(PIN_DETECTOR);
+
+
+//  analogWrite(PIN_DIMMER, currentAbsolute);
+  analogWriteFreq(analogWriteFreqVal);
+  analogWriteRange(1000);
+
+//  Serial.begin(115200);
+//  delay(10);
+
+  downCounterLimit = 0;
+
+
   /* Initiate homie object */
-  Homie.setFirmware("LED-dimmer", "1.0.56");
-  Homie.setBrand("MyIOT");
-  Homie.enableBuiltInLedIndicator(false);
+  Homie_setFirmware(NODE_FIRMWARE, NODE_VERSION);
+  Homie_setBrand("MyIOT");
+  Homie.disableLedFeedback();
   Homie.setSetupFunction(handlerSetup);
   Homie.setLoopFunction(handlerLoop);
-  Homie.enableLogging(false);
-//  dimmerNode.subscribe("frequency", dimmerHandlerFreq);
-  dimmerNode.subscribe("absolute", handlerDimmerAbs);
-  dimmerNode.subscribe("percentage", handlerDimmerPerc);
-  dimmerNode.subscribe("switch", handlerSwitch);
-  dimmerNode.subscribe("timer", handlerTimer);
-  dimmerNode.subscribe("dimMode", handlerDimMode);
-  Homie.registerNode(dimmerNode);
-  Homie.registerNode(lightSensorNode);
+  Homie.disableLogging();
+  Homie.onEvent(onHomieEvent); // before Homie.setup()
+  dimmerNode.advertise("absolute").settable(handlerDimmerAbs);
+  dimmerNode.advertise("percentage").settable( handlerDimmerPerc);
+  dimmerNode.advertise("switch").settable( handlerSwitch);
+  dimmerNode.advertise("timer").settable( handlerTimer);
+  lightSensorNode.advertise("value");
+  dimMode.setDefaultValue(DEFAULT_DIM_MODE).setValidator([] (long candidate) {
+    return (candidate >= 1) && (candidate <= 3);
+  });
   Homie.setup();
 }
 
 /*
  * Main loop - only homie support
  */
-void loop() {
+void loop()
+{
   Homie.loop();
 }
