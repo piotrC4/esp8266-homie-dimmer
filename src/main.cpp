@@ -35,7 +35,7 @@
 #define FADE_DELAY 15
 
 #define NODE_FIRMWARE "LED-dimmer"
-#define NODE_VERSION "1.0.69"
+#define NODE_VERSION "1.0.72"
 #define DEFAULT_DIM_MODE 2
 
 unsigned long downCounterStart;   // wskaznik startu timera
