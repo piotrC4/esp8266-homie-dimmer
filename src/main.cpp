@@ -3,9 +3,10 @@
  * based on: https://github.com/marvinroger/homie-esp8266
  *
  * Features:
- * - dimming   - devices/_device_ID_/dimmer/value/set (0..100)
- * - switching - devices/_device_ID_/dimmer/switch/set (ON-dim 100%, OFF- dim 0%)
- * - timer     - devices/_device_ID_/dimmer/timer/set (time [s] of 100% dim)
+ * - dimming   - homie/_device_ID_/dimmer/percentage/set (0..100%)
+ * - dimming   - homie/_device_ID_/dimmer/absolute/set (0..1000)
+ * - switching - homie/_device_ID_/dimmer/switch/set (ON-dim 100%, OFF- dim 0%)
+ * - timer     - homie/_device_ID_/dimmer/timer/set (time [s] of 100% dim)
  * - Manual ON/OFF by momentary turning off/on power
  *
  * USED GPIO (ESP1):
@@ -14,7 +15,7 @@
  * - GPIO-0 - Homie reset input (pullup + switch to ground)
  * USED GPIO (WEMOS-ESP12)
  * - GPIO-14 - bootdelay detector
- * - GPIO-16 - dimmer output (MOSFET)
+ * - GPIO-12 - dimmer output (MOSFET)
  * - GPIO-0  - Homie reset input (pullup + switch to ground)
  *
  * RX Line circuit (momentary reboot detector)
@@ -30,12 +31,11 @@
 #include <EEPROM.h>
 
 // Delay in ms for each percentage fade up/down (2ms = 2s full-range dim/1024)
-//#define FADE_DELAY 1
-// Delay in ms for each percentage fade up/down (15ms = 1,5s full-range dim/100)
-#define FADE_DELAY 15
+#define FADE_DELAY 1
+
 
 #define NODE_FIRMWARE "LED-dimmer"
-#define NODE_VERSION "1.0.72"
+#define NODE_VERSION "1.0.73"
 #define DEFAULT_DIM_MODE 2
 
 unsigned long downCounterStart;   // wskaznik startu timera
@@ -46,17 +46,18 @@ const int PIN_DIMMER = 2; // GPIO-2
 const int PIN_DETECTOR = 3; // GPIO-3 - RX line - boot delay detectror
 */
 /* WEMOS */
-const int PIN_DIMMER = 16; // GPIO-16
+const int PIN_DIMMER = 12; // GPIO-12
 const int PIN_DETECTOR = 14; // GPIO-14
 
-bool lockMode = false; // Lock mode - update to OpenHab
-
 int initDetecorVal;         // Value of fast reboot detector 0-normal, 1-fast
-static int currentAbsolute=0;  // Current dim level absolute 0..1023
+static int currentAbsolute=0;  // Current dim level absolute 0..1000
+static int targetAbsolute=0; // Target dimmer level absoulute 0..1000
 static int currentPercentage=0; // Current dim percentage 0..100
 unsigned int analogWriteFreqVal = 200; // SOFT PWM frequency
-unsigned long int startMomentAnalog = 0; // znacznik czasu odczytu analoga
-int analogState = 0 ; // Ostatni zapamietany odczyt analoga
+unsigned long int startMomentAnalog = 0; // Analog read time marker
+unsigned long int startMomentDimming = 0;
+int analogState = 0 ; // Last analog read
+int dimmmDelta = 0; // Dimmer change current delta
 
 HomieSetting<long> dimMode("dimMode", "Dimmer start mode"); // 1 - with detector, 2 - always on on start
 struct EEpromDataStruct {
@@ -67,28 +68,17 @@ EEpromDataStruct EEpromData;
 HomieNode dimmerNode("dimmer", "dimmer");
 HomieNode lightSensorNode("light", "voltage");
 
+
 /***
  * Fade LED up/down (absolute based)
  */
 void fadeToAbsolute( int toAbsolute)
 {
   int delta = ( toAbsolute - currentAbsolute ) < 0 ? -1 : 1;
-  while ( currentAbsolute != toAbsolute )
-  {
-    currentAbsolute += delta;
-    analogWrite(PIN_DIMMER, currentAbsolute);
-    delay( FADE_DELAY );
-  }
-  if (toAbsolute == 1000)
-  {
-    digitalWrite(PIN_DIMMER, true);
-    currentPercentage = 100;
-  } else {
-    currentPercentage = (currentAbsolute / 10);
-  }
-  EEpromData.currentPercentage = currentPercentage;
-  EEPROM.put(0, EEpromData);
-  EEPROM.commit();
+  targetAbsolute = toAbsolute;
+  dimmmDelta = delta;
+  startMomentDimming = millis();
+  return;
 }
 
 /***
@@ -96,24 +86,8 @@ void fadeToAbsolute( int toAbsolute)
  */
 void fadeToPercentage( int toPercentage )
 {
-  currentPercentage = toPercentage;
-  EEpromData.currentPercentage = toPercentage;
-  EEPROM.put(0, EEpromData);
-  EEPROM.commit();
-  //int toAbsolute = ( toPercentage * 1000 ) / 100;
-  //int toAbsolute = toPercentage;
-  int toAbsolute = (toPercentage*toPercentage)/10;
-  int delta = ( toAbsolute - currentAbsolute ) < 0 ? -1 : 1;
-  while ( currentAbsolute != toAbsolute )
-  {
-    currentAbsolute += delta;
-    analogWrite(PIN_DIMMER, currentAbsolute);
-    delay( FADE_DELAY );
-  }
-  if (toPercentage==100)
-  {
-    digitalWrite(PIN_DIMMER, true);
-  }
+  fadeToAbsolute(toPercentage * 10);
+  return;
 }
 
 /*
@@ -143,18 +117,6 @@ void updateNodeStatus()
  */
 void handlerSetup()
 {
-  EEPROM.begin(sizeof(EEpromData));
-  EEPROM.get(0,EEpromData);
-
-  // korekcja wartosci dimmera
-  if (EEpromData.currentPercentage>100 && EEpromData.currentPercentage<0)
-  {
-    EEpromData.currentPercentage = 0;
-  }
-
-  //Serial.printf("currentPercentage: %d\n",EEpromData.currentPercentage);
-
-
   switch ((int)dimMode.get())
   {
     case 1: //  1 - with detector
@@ -203,6 +165,7 @@ void handlerSetup()
   pinMode(PIN_DIMMER, OUTPUT);
   analogWrite(PIN_DIMMER, currentAbsolute);
 
+  targetAbsolute = currentAbsolute;
   String msg;
   msg = initDetecorVal;
   dimmerNode.setProperty( "starterStatus").send( msg);
@@ -223,9 +186,8 @@ void handlerLoop()
     {
       downCounterLimit = 0;
       fadeToPercentage( 0 );
-      updateNodeStatus();
     }
-  }
+  } else
   if (millis()-startMomentAnalog>2000)
   {
     startMomentAnalog=millis();
@@ -240,6 +202,31 @@ void handlerLoop()
       String msg;
       msg = voltage;
       lightSensorNode.setProperty( "value").send( msg);
+    }
+  } else
+  if (targetAbsolute != currentAbsolute && millis()-startMomentDimming>FADE_DELAY)
+  {
+    // Dimming have place
+    currentAbsolute += dimmmDelta;
+    analogWrite(PIN_DIMMER, ((currentAbsolute*currentAbsolute)/1000));
+    startMomentDimming=millis();
+    if (targetAbsolute == currentAbsolute)
+    {
+      // End of dimming
+      if (targetAbsolute == 1000)
+      {
+        digitalWrite(PIN_DIMMER, true);
+        currentPercentage = 100;
+      } else {
+        currentPercentage = (currentAbsolute / 10);
+      }
+      if (dimMode.get()==1)
+      {
+        EEpromData.currentPercentage = currentPercentage;
+        EEPROM.put(0, EEpromData);
+        EEPROM.commit();
+      }
+      updateNodeStatus();
     }
   }
 }
@@ -260,7 +247,6 @@ bool handlerDimmerPerc(const HomieRange& range, const String& message)
     {
       fadeToPercentage( requestedPercentage );
     }
-    updateNodeStatus();
     return true;
   } else if (message=="0") {
     downCounterLimit = 0;
@@ -268,7 +254,6 @@ bool handlerDimmerPerc(const HomieRange& range, const String& message)
     {
       fadeToPercentage( 0 );
     }
-    updateNodeStatus();
   }
   return false;
 }
@@ -288,7 +273,6 @@ bool handlerDimmerAbs(const HomieRange& range, const String& message)
     {
       fadeToAbsolute( requestedAbsolute );
     }
-    updateNodeStatus();
     return true;
   } else if (message=="0") {
     downCounterLimit = 0;
@@ -296,7 +280,6 @@ bool handlerDimmerAbs(const HomieRange& range, const String& message)
     {
       fadeToAbsolute( 0 );
     }
-    updateNodeStatus();
   }
   return false;
 }
@@ -379,20 +362,23 @@ bool handlerTimer(const HomieRange& range, const String& message)
 void setup()
 {
 
+  EEPROM.begin(sizeof(EEpromData));
+  EEPROM.get(0,EEpromData);
+
+  // eeprom data correction
+  if (EEpromData.currentPercentage>100 && EEpromData.currentPercentage<0)
+  {
+    EEpromData.currentPercentage = 0;
+  }
 
   pinMode(PIN_DETECTOR, INPUT_PULLUP);
   initDetecorVal=digitalRead(PIN_DETECTOR);
 
-
-//  analogWrite(PIN_DIMMER, currentAbsolute);
   analogWriteFreq(analogWriteFreqVal);
   analogWriteRange(1000);
 
-//  Serial.begin(115200);
-//  delay(10);
 
   downCounterLimit = 0;
-
 
   /* Initiate homie object */
   Homie_setFirmware(NODE_FIRMWARE, NODE_VERSION);
@@ -401,11 +387,12 @@ void setup()
   Homie.setSetupFunction(handlerSetup);
   Homie.setLoopFunction(handlerLoop);
   Homie.disableLogging();
-  Homie.onEvent(onHomieEvent); // before Homie.setup()
+  Homie.onEvent(onHomieEvent);
   dimmerNode.advertise("absolute").settable(handlerDimmerAbs);
   dimmerNode.advertise("percentage").settable( handlerDimmerPerc);
   dimmerNode.advertise("switch").settable( handlerSwitch);
   dimmerNode.advertise("timer").settable( handlerTimer);
+  dimmerNode.advertise("freq").settable(dimmerHandlerFreq);
   lightSensorNode.advertise("value");
   dimMode.setDefaultValue(DEFAULT_DIM_MODE).setValidator([] (long candidate) {
     return (candidate >= 1) && (candidate <= 3);
