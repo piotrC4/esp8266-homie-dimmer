@@ -1,31 +1,5 @@
 /*
  * ESP8266 MQTT Homie based LED dimmer with light sensor (photo-resistor)
- * based on: https://github.com/marvinroger/homie-esp8266
- *
- * Features:
- * - dimming   - homie/_device_ID_/dimmer/percentage/set (0..100%)
- * - dimming   - homie/_device_ID_/dimmer/absolute/set (0..1000)
- * - switching - homie/_device_ID_/dimmer/switch/set (ON-dim 100%, OFF- dim 0%)
- * - timer     - homie/_device_ID_/dimmer/timer/set (time [s] of 100% dim)
- * - Manual ON/OFF by momentary turning off/on power
- *
- * USED GPIO (ESP1):
- * - GPIO-3 - RX Line - boot delay detector
- * - GPIO-2 - Dimmer output (MOSFET)
- * - GPIO-0 - Homie reset input (pullup + switch to ground)
- * USED GPIO (WEMOS-ESP12)
- * - GPIO-14 - bootdelay detector
- * - GPIO-12 - dimmer output (MOSFET)
- * - GPIO-0  - Homie reset input (pullup + switch to ground)
- *
- * RX Line circuit (momentary reboot detector)
- *              |\ |    _____200k     _____2k
- *   +3,3V _____| >|---|____|---*----|____|-----*--------->GPIO3 (ESP1)
- *              |/ |            |               |          GPIO14 (WEMOS)
- *                            ----47uF        |--| 200k
- *                            ----            |__|
- *                            _|_             _|_
- *
  */
 #include <Homie.h>
 #include <EEPROM.h>
@@ -33,31 +7,31 @@
 // Delay in ms for each percentage fade up/down (2ms = 2s full-range dim/1024)
 #define FADE_DELAY 1
 
-
-#define NODE_FIRMWARE "LED-dimmer"
-#define NODE_VERSION "1.0.73"
+//#define NODE_FIRMWARE "LED-dimmer"
+//#define NODE_VERSION "1.0.73"
 #define DEFAULT_DIM_MODE 2
 
 unsigned long downCounterStart;   // wskaznik startu timera
 unsigned long downCounterLimit=0; // limit timera
+
 
 /* ESP01
 const int PIN_DIMMER = 2; // GPIO-2
 const int PIN_DETECTOR = 3; // GPIO-3 - RX line - boot delay detectror
 */
 /* WEMOS */
-const int PIN_DIMMER = 12; // GPIO-12
-const int PIN_DETECTOR = 14; // GPIO-14
+const int PIN_DIMMER = 12;    // GPIO-12
+const int PIN_DETECTOR = 14;  // GPIO-14
 
-int initDetecorVal;         // Value of fast reboot detector 0-normal, 1-fast
-static int currentAbsolute=0;  // Current dim level absolute 0..1000
-static int targetAbsolute=0; // Target dimmer level absoulute 0..1000
-static int currentPercentage=0; // Current dim percentage 0..100
-unsigned int analogWriteFreqVal = 200; // SOFT PWM frequency
-unsigned long int startMomentAnalog = 0; // Analog read time marker
-unsigned long int startMomentDimming = 0;
-int analogState = 0 ; // Last analog read
-int dimmmDelta = 0; // Dimmer change current delta
+int initDetecorVal;                       // Value of fast reboot detector 0-normal, 1-fast
+static int currentAbsolute=0;             // Current dim level absolute 0..1000
+static int targetAbsolute=0;              // Target dimmer level absoulute 0..1000
+static int currentPercentage=0;           // Current dim percentage 0..100
+unsigned int analogWriteFreqVal = 200;    // SOFT PWM frequency
+unsigned long int startMomentAnalog = 0;  // Analog read time marker
+unsigned long int startMomentDimming = 0; // Dimmer time marker
+int lastAnalogState = 0 ;                 // Last analog read
+int dimmmDelta = 0;                       // Dimmer change current delta
 
 HomieSetting<long> dimMode("dimMode", "Dimmer start mode"); // 1 - with detector, 2 - always on on start
 struct EEpromDataStruct {
@@ -68,8 +42,7 @@ EEpromDataStruct EEpromData;
 HomieNode dimmerNode("dimmer", "dimmer");
 HomieNode lightSensorNode("light", "voltage");
 
-
-/***
+/*
  * Fade LED up/down (absolute based)
  */
 void fadeToAbsolute( int toAbsolute)
@@ -81,7 +54,7 @@ void fadeToAbsolute( int toAbsolute)
   return;
 }
 
-/***
+/*
  * Fade LED up/down (percentage based)
  */
 void fadeToPercentage( int toPercentage )
@@ -109,7 +82,6 @@ void updateNodeStatus()
   dimmerNode.setProperty(  "absolute").send( msg );
   msg = downCounterLimit;
   dimmerNode.setProperty(  "timer").send( msg );
-
 }
 
 /*
@@ -120,11 +92,11 @@ void handlerSetup()
   switch ((int)dimMode.get())
   {
     case 1: //  1 - with detector
-      Serial.println("DETECTOR mode");
+      Homie.getLogger() << "DETECTOR mode" << endl;
       // We had fast reboot - dimmer state should change
       if (initDetecorVal==1)
       {
-        Serial.println(" - fast reboot");
+        Homie.getLogger() << " - fast reboot" << endl;
         // Inversion of dimmer state - compare to EEPROM data
         if (EEpromData.currentPercentage>0)
         {
@@ -140,21 +112,21 @@ void handlerSetup()
         delay(3001);
       } else {
         // Slow Reboot -  0
-        Serial.println(" - slow reboot");
+        Homie.getLogger() << " - slow reboot" << endl;
         currentAbsolute=0;
         currentPercentage=0;
         EEpromData.currentPercentage=0;
       }
       break;
     case 2: // 2 - always ON on start
-      Serial.println("ON on start mode");
+      Homie.getLogger() << "ON on start mode" << endl;
       currentAbsolute=1000;
       currentPercentage=100;
       EEpromData.currentPercentage=100;
       break;
     case 3: // 3 - always OFF on start
     default:
-      Serial.println("OFF on start mode");
+      Homie.getLogger() << "OFF on start mode" << endl;
       currentAbsolute=0;
       currentPercentage=0;
       EEpromData.currentPercentage=0;
@@ -192,13 +164,11 @@ void handlerLoop()
   {
     startMomentAnalog=millis();
     int newAnalogState = analogRead(A0);
-    if (abs(newAnalogState - analogState)>20)
+    if (abs(newAnalogState - lastAnalogState)>20)
     {
-      analogState = newAnalogState;
-      float voltage = analogState * (3.3 / 1023.0);
-      Serial.print(analogState);
-      Serial.print(" - ");
-      Serial.println(voltage);
+      lastAnalogState = newAnalogState;
+      float voltage = lastAnalogState * (3.3 / 1023.0);
+      Homie.getLogger() << "analog: " <<lastAnalogState << " - " << voltage << endl;
       String msg;
       msg = voltage;
       lightSensorNode.setProperty( "value").send( msg);
@@ -257,6 +227,7 @@ bool handlerDimmerPerc(const HomieRange& range, const String& message)
   }
   return false;
 }
+
 /*
  * MQTT event processing - dimmer value request absolute
  */
@@ -283,6 +254,7 @@ bool handlerDimmerAbs(const HomieRange& range, const String& message)
   }
   return false;
 }
+
 /*
  * MQTT event processing - analog write freqency of Soft PWM
  */
@@ -297,6 +269,7 @@ bool dimmerHandlerFreq(const HomieRange& range, const String& message)
     msg = requestedFreq;
     dimmerNode.setProperty(  "frequency").send( msg );
   }
+  return true;
 }
 
 /*
@@ -308,18 +281,17 @@ bool handlerSwitch(const HomieRange& range, const String& message)
    {
      downCounterLimit = 0;
      fadeToPercentage( 100 );
-     updateNodeStatus();
      return true;
    }
    if (message=="OFF")
    {
      downCounterLimit = 0;
      fadeToPercentage( 0 );
-     updateNodeStatus();
      return true;
    }
    return false;
 }
+
 /*
  * Homie event processing
  */
@@ -335,8 +307,24 @@ void onHomieEvent(const HomieEvent& event)
       // Do whatever you want when OTA is started
       fadeToPercentage(100);
     break;
+    case HomieEventType::NORMAL_MODE:
+    case HomieEventType::OTA_PROGRESS:
+    case HomieEventType::OTA_SUCCESSFUL:
+    case HomieEventType::OTA_FAILED:
+    case HomieEventType::ABOUT_TO_RESET:
+    case HomieEventType::WIFI_CONNECTED:
+    case HomieEventType::WIFI_DISCONNECTED:
+    case HomieEventType::MQTT_READY:
+    case HomieEventType::MQTT_DISCONNECTED:
+    case HomieEventType::MQTT_PACKET_ACKNOWLEDGED:
+    case HomieEventType::READY_TO_SLEEP:
+    case HomieEventType::SENDING_STATISTICS:
+    case HomieEventType::STANDALONE_MODE:
+    break;
+
   }
 }
+
 /*
  * MQTT event processing - timer Request
  */
@@ -361,6 +349,7 @@ bool handlerTimer(const HomieRange& range, const String& message)
  */
 void setup()
 {
+  Serial.begin(115200);
 
   EEPROM.begin(sizeof(EEpromData));
   EEPROM.get(0,EEpromData);
@@ -377,7 +366,6 @@ void setup()
   analogWriteFreq(analogWriteFreqVal);
   analogWriteRange(1000);
 
-
   downCounterLimit = 0;
 
   /* Initiate homie object */
@@ -386,7 +374,7 @@ void setup()
   Homie.disableLedFeedback();
   Homie.setSetupFunction(handlerSetup);
   Homie.setLoopFunction(handlerLoop);
-  Homie.disableLogging();
+  //Homie.disableLogging();
   Homie.onEvent(onHomieEvent);
   dimmerNode.advertise("absolute").settable(handlerDimmerAbs);
   dimmerNode.advertise("percentage").settable( handlerDimmerPerc);
