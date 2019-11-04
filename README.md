@@ -1,6 +1,5 @@
 
-ESP8266 MQTT Homie based LED dimmer with light sensor (photo-resistor) based on: https://github.com/homieiot/homie-esp8266
- 
+ESP8266 MQTT Homie(https://github.com/homieiot/homie-esp8266) based LED dimmer with light sensor (photo-resistor - build in into Witty module) 
 Features:
 - dimming   - `homie/_device_ID_/dimmer/percentage/set` (0..100%)
 - dimming   - `homie/_device_ID_/dimmer/absolute/set` (0..1000)

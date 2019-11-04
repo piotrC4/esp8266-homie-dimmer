@@ -7,8 +7,6 @@
 // Delay in ms for each percentage fade up/down (2ms = 2s full-range dim/1024)
 #define FADE_DELAY 1
 
-//#define NODE_FIRMWARE "LED-dimmer"
-//#define NODE_VERSION "1.0.73"
 #define DEFAULT_DIM_MODE 2
 
 unsigned long downCounterStart;   // wskaznik startu timera
@@ -349,7 +347,7 @@ bool handlerTimer(const HomieRange& range, const String& message)
  */
 void setup()
 {
-  Serial.begin(115200);
+  Serial.begin(CUST_SERIAL_SPEED);
 
   EEPROM.begin(sizeof(EEpromData));
   EEPROM.get(0,EEpromData);
@@ -369,7 +367,7 @@ void setup()
   downCounterLimit = 0;
 
   /* Initiate homie object */
-  Homie_setFirmware(NODE_FIRMWARE, NODE_VERSION);
+  Homie_setFirmware(FIRMWARE_NAME, FIRMWARE_VER);
   Homie_setBrand("MyIOT");
   Homie.disableLedFeedback();
   Homie.setSetupFunction(handlerSetup);
